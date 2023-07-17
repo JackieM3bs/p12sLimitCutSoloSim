@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Map Game</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            position: relative;
+        }
+        canvas {
+            display: block;
+        }
+        #gameCanvasContainer {
+            position: relative;
+        }
+        #debugInfo {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            color: red;
+            font-size: 20px;
+        }
+        #options {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: red;
+            font-size: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameCanvasContainer">
+        <div id="options">
+            <label>
+                <input type="checkbox" id="movementToggle"> Mouse Movement
+            </label>
+            <br/>
+            <label>
+                <input type="checkbox" id="debugToggle"> Debug Mode
+            </label>
+        </div>
+        <canvas id="gameCanvas"></canvas>
+        <div id="debugInfo"></div>
+    </div>
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+
+        canvas.width = 1394;
+        canvas.height = 784;
+
+        const circleCenterX = canvas.width / 2;
+        const circleCenterY = canvas.height / 2;
+        const circleRadius = 370;
+
+		const puddleImage = new Image();
+		puddleImage.src = "ff-circle.svg";
+		puddleImage.onload = startGame;
+
+        const bossImage = new Image();
+        const playerImages = [];
+        const playerTypes = ["healer", "healer", "melee", "melee", "ranged", "ranged", "tank", "tank"];
+        const backgroundImage = new Image();
+        let bossX = 696;
+        let bossY = 0;
+        let mouseMovement = false;
+        let mouseX = 0, mouseY = 0;
+        let bossOriginalWidth = 0;
+        let bossOriginalHeight = 0;
+        let spacePressed = false;
+        let spacePressTimestamp = 0;
+        let hasBossJumped = false;
+        let allPlayersReachedTargetTimestamp;
+        let playersReachedTarget = 0;
+		let bossTargetX = null;
+		let bossTargetY = null;
+		let bossMoveSpeed = 2;
+		let preJumpBeamTimestamp;
+		let hasBossJumpedSecondTime = false;
+		let beamIsActive = false;
+		let secondJumpInitiated = false;
+		let secondJumpTimestamp = null;
+		let secondPuddleSpawned  = false;
+		let puddlePositions = [];
+		let beamCount = 0;
+		
+		const beamDuration = 2000;  // The beam lasts 2 seconds
+		const beamImage = new Image();
+		
+		beamImage.src = "ff-square.svg";
+		beamImage.onload = startGame;
+        const keysPressed = {};
+        let players = [];
+
+        for (let i = 0; i < playerTypes.length; i++) {
+            playerImages[i] = new Image();
+            playerImages[i].src = `${playerTypes[i]}.png`;
+            playerImages[i].onload = startGame;
+        }
+
+        const numberImages = [];
+        for (let i = 1; i <= 8; i++) {
+            numberImages[i] = new Image();
+            numberImages[i].src = `${i}.svg`;
+            numberImages[i].onload = startGame;
+        }
+
+        bossImage.src = "ff-boss.svg";
+        bossImage.onload = () => {
+            // Save the original dimensions
+            bossOriginalWidth = bossImage.width;
+            bossOriginalHeight = bossImage.height;
+            startGame();
+        }
+        backgroundImage.src = "background.png";
+        backgroundImage.onload = startGame;
+
+        let playerTargets = [
+            { x: 660, y: 680 }, // Player 1
+            { x: 810, y: 90 },  // Player 2
+            { x: 660, y: 680 }, // Player 3
+            { x: 810, y: 90 },  // Player 4
+            { x: 560, y: 160 }, // Player 5
+            { x: 930, y: 530 }, // Player 6
+            { x: 500, y: 270 }, // Player 7
+            { x: 930, y: 530 }  // Player 8
+        ];
+		
+		let playerTargetsAfterJump = [
+			{ x: 476, y: 611 }, // Player 1
+			{ x: 670, y: 55 },  // Player 2
+			{ x: 476, y: 611 }, // Player 3
+			{ x: 670, y: 55 },  // Player 4
+			{ x: 356, y: 353},  // Player 5
+			{ x: 923, y: 449 }, // Player 6
+			{ x: 356, y: 353}, // Player 7
+			{ x: 790, y: 551 }  // Player 8
+		];
+		
+	
+
+				
+function drawBeam(startX, startY, endX, endY) {
+    // Calculate the vector from the boss to the player
+    let dx = endX - startX;
+    let dy = endY - startY;
+
+    // Normalize the vector (i.e., get the direction vector)
+    let magnitude = Math.sqrt(dx * dx + dy * dy);
+    dx /= magnitude;
+    dy /= magnitude;
+
+    // Extend the beam to the circle's edge
+    endX = startX + dx * circleRadius;
+    endY = startY + dy * circleRadius;
+
+    // Calculate the angle for the beam
+    const angle = Math.atan2(dy, dx);
+    const distance = Math.hypot(endX - startX, endY - startY);
+
+    // Draw the beam
+    ctx.save();
+    ctx.translate(startX, startY);
+    ctx.rotate(angle);
+    ctx.globalAlpha = 0.5;  // Set the opacity to 50%
+    ctx.drawImage(beamImage, 0, -beamImage.height / 2, distance, beamImage.height);
+    ctx.globalAlpha = 1.0;  // Reset the opacity to 100%
+    ctx.restore();
+}
+
+
+		
+function drawPuddle(x, y, scale, shouldMoveWithBoss) {
+    const puddleWidth = puddleImage.width * scale;
+    const puddleHeight = puddleImage.height * scale;
+    const puddleX = x - puddleWidth / 2;
+    const puddleY = y - puddleHeight / 2;
+
+    ctx.globalAlpha = 0.5;
+    ctx.drawImage(puddleImage, puddleX, puddleY, puddleWidth, puddleHeight);
+    ctx.globalAlpha = 1.0;
+}
+
+
+function movePlayers() {
+    const speed = 0.001;
+    const threshold = 2;
+
+    playersReachedTarget = 0;
+
+    players.forEach(player => {
+        if (player !== players[0] && Date.now() >= player.moveTimestamp) {
+            let target = hasBossJumped ? playerTargetsAfterJump[player.number - 1] : playerTargets[player.number - 1];
+
+            if (Math.abs(player.x - target.x) > threshold || Math.abs(player.y - target.y) > threshold) {
+                player.x += (target.x - player.x) * speed;
+                player.y += (target.y - player.y) * speed;
+            } else {
+                playersReachedTarget++;
+            }
+        }
+    });
+
+    if (playersReachedTarget === players.length - 1 && !hasBossJumped && !preJumpBeamTimestamp) {
+        if (!allPlayersReachedTargetTimestamp) {
+            allPlayersReachedTargetTimestamp = Date.now();
+            const player5 = players.find(player => player.number === 5);
+            const player7 = players.find(player => player.number === 7);
+            if (player5 && player7) {
+                beamTargets.push({ x: player5.x, y: player5.y });
+                beamTargets.push({ x: player7.x, y: player7.y });
+            }
+        }
+
+        // After 2 seconds of players reaching their positions, trigger the beams
+        if (Date.now() - allPlayersReachedTargetTimestamp > 2000) {
+            preJumpBeamTimestamp = Date.now();
+        }
+    }
+}
+
+
+
+
+
+
+
+function resetGame() {
+    // Reset positions of players and re-assign numbers
+    players.forEach(player => {
+        player.x = player.initialX;
+        player.y = player.initialY;
+    });
+
+    // Reset boss position
+    bossX = 696;
+    bossY = 0;
+
+    // Nullify the boss's target
+    bossTargetX = null;
+    bossTargetY = null;
+
+    console.log(`Resetting boss position to (${bossX}, ${bossY})`);
+
+    assignNumbersToPlayers();
+    // Reset the timestamp of the spacebar press
+    spacePressTimestamp = Date.now();
+    // Reset the hasBossJumped variable
+    hasBossJumped = false;
+    puddlePositions = []; // Clear the puddle positions array
+    secondPuddleSpawned = false; // Reset the second puddle spawn flag
+    hasBossJumpedSecondTime = false;
+}
+
+
+        function assignNumbersToPlayers() {
+            let shuffledNumbers = [...Array(playerTypes.length).keys()].map(n => n + 1).sort(() => Math.random() - 0.5);
+
+            players.forEach((player, index) => {
+                player.number = shuffledNumbers[index];
+                player.numberImage = numberImages[shuffledNumbers[index]];
+                player.moveTimestamp = Date.now() + 5000;
+            });
+        }
+
+        // Space bar event
+        window.addEventListener("keydown", (event) => {
+            if (event.code === "Space") {
+                resetGame();
+            }
+        });
+
+        function startGame() {
+            players = playerTypes.map((type, index) => {
+                let x = canvas.width / 2 + Math.cos(index / playerTypes.length * 2 * Math.PI) * 200 + Math.random() * 50 - 25;
+                let y = canvas.height / 2 + Math.sin(index / playerTypes.length * 2 * Math.PI) * 200 + Math.random() * 50 - 25;
+                return {
+                    x: x,
+                    y: y,
+                    initialX: x,
+                    initialY: y,
+                    image: playerImages[index],
+                    moveTimestamp: Infinity
+                };
+            });
+
+            window.addEventListener('keydown', function (event) {
+                keysPressed[event.key] = true;
+                if (event.key === ' ') {
+                    spacePressed = true;
+                    spacePressTimestamp = Date.now();
+                }
+            });
+
+            window.addEventListener('keyup', function (event) {
+                keysPressed[event.key] = false;
+                if (event.key === ' ') {
+                    spacePressed = false;
+                }
+            });
+
+            document.getElementById("movementToggle").addEventListener("change", (event) => {
+                mouseMovement = event.target.checked;
+            });
+
+            let debugMode = false;
+            document.getElementById("debugToggle").addEventListener("change", (event) => {
+                debugMode = event.target.checked;
+                if (!debugMode) {
+                    document.getElementById('debugInfo').innerHTML = '';
+                }
+            });
+
+            canvas.addEventListener("mousemove", event => {
+                mouseX = event.clientX;
+                mouseY = event.clientY;
+                if (mouseMovement) {
+                    players[0].x = mouseX;
+                    players[0].y = mouseY;
+                }
+
+                if (debugMode) {
+                    document.getElementById('debugInfo').innerHTML = `X: ${mouseX}, Y: ${mouseY}`;
+                } else {
+                    document.getElementById('debugInfo').innerHTML = '';
+                }
+            });
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        function updatePlayer() {
+            const speed = .2;
+            let newX, newY;
+
+            if (keysPressed['w'] || keysPressed['ArrowUp']) {
+                newY = players[0].y - speed;
+                if (Math.hypot(circleCenterX - players[0].x, circleCenterY - newY) <= circleRadius) {
+                    players[0].y = newY;
+                }
+            }
+            if (keysPressed['a'] || keysPressed['ArrowLeft']) {
+                newX = players[0].x - speed;
+                if (Math.hypot(circleCenterX - newX, circleCenterY - players[0].y) <= circleRadius) {
+                    players[0].x = newX;
+                }
+            }
+            if (keysPressed['s'] || keysPressed['ArrowDown']) {
+                newY = players[0].y + speed;
+                if (Math.hypot(circleCenterX - players[0].x, circleCenterY - newY) <= circleRadius) {
+                    players[0].y = newY;
+                }
+            }
+            if (keysPressed['d'] || keysPressed['ArrowRight']) {
+                newX = players[0].x + speed;
+                if (Math.hypot(circleCenterX - newX, circleCenterY - players[0].y) <= circleRadius) {
+                    players[0].x = newX;
+                }
+            }
+        }
+
+let beamTargets = [];
+
+function gameLoop() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear the canvas
+
+    // Draw background
+    ctx.drawImage(backgroundImage, 0, 0, canvas.width, canvas.height);
+
+    // Draw puddles at the saved positions
+    puddlePositions.forEach(position => {
+        drawPuddle(position.x, position.y, 3.2);
+    });
+
+    // Draw players
+    players.forEach(player => {
+        ctx.drawImage(player.image, player.x - 25, player.y - 25, 50, 50);
+
+        if (player.numberImage) {
+            ctx.drawImage(player.numberImage, player.x - player.numberImage.width / 2, player.y - player.numberImage.height / 2 - 50);
+        }
+    });
+
+    // Draw boss
+    let bossDrawX = bossX - bossOriginalWidth * 1.30 / 2;
+    let bossDrawY = bossY - bossOriginalHeight * 1.30 / 2;
+    ctx.drawImage(bossImage, bossDrawX, bossDrawY, bossOriginalWidth * 1.30, bossOriginalHeight * 1.30);
+
+    if (mouseMovement) {
+        players[0].x = mouseX;
+        players[0].y = mouseY;
+    } else {
+        updatePlayer();
+    }
+
+    movePlayers();
+
+    if (spacePressed && Date.now() - spacePressTimestamp > 3000) {
+        assignNumbersToPlayers();
+        spacePressed = false;
+    }
+
+    if (allPlayersReachedTargetTimestamp && Date.now() - allPlayersReachedTargetTimestamp > 2000 && !preJumpBeamTimestamp) {
+        // Spawn beams before the boss jumps
+        const player5 = players.find(player => player.number === 5);
+        const player7 = players.find(player => player.number === 7);
+        if (player5 && player7) {
+            preJumpBeamTimestamp = Date.now();
+            beamTargets = [player5, player7];
+        }
+    }
+
+    // Beam logic
+    if (beamTargets.length > 0 && Date.now() - preJumpBeamTimestamp < beamDuration) {
+        beamTargets.forEach(target => {
+            drawBeam(696, 390, target.x, target.y);
+        });
+    }
+
+    if (preJumpBeamTimestamp && Date.now() - preJumpBeamTimestamp > beamDuration && !hasBossJumped) {
+        // Move the boss to the player marked with 1 after beamDuration
+        const player1 = players.find(player => player.number === 1);
+        if (player1) {
+            bossTargetX = player1.x;
+            bossTargetY = player1.y;
+            puddlePositions.push({ x: bossTargetX, y: bossTargetY }); // Save the position
+            hasBossJumped = true;
+        }
+    }
+
+    if (hasBossJumped && bossTargetX !== null && bossTargetY !== null) {
+        // Calculate distance to target
+        let distance = Math.sqrt(Math.pow(bossTargetX - bossX, 2) + Math.pow(bossTargetY - bossY, 2));
+        // Calculate direction to target
+        let directionX = (bossTargetX - bossX) / distance;
+        let directionY = (bossTargetY - bossY) / distance;
+        // Move boss in the direction of target
+        bossX += directionX * bossMoveSpeed;
+        bossY += directionY * bossMoveSpeed;
+    }
+
+    if (hasBossJumped && Date.now() - preJumpBeamTimestamp > beamDuration + 3000 && !secondJumpInitiated) {
+        const player2 = players.find(player => player.number === 2);
+        if (player2) {
+            bossTargetX = player2.x;
+            bossTargetY = player2.y;
+            puddlePositions.push({ x: bossTargetX, y: bossTargetY }); // Save the position
+            secondJumpInitiated = true;
+        }
+    }
+
+    requestAnimationFrame(gameLoop);
+}
+
+
+
+
+
+
+
+
+    </script>
+</body>
+</html>
